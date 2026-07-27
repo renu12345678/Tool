@@ -1,0 +1,85 @@
+image: node:20.11.0
+
+stages:
+  - build
+  - push_to_artifactory
+  - config
+  - trigger
+
+cache:
+  paths:
+    - node_modules/
+
+before_script:
+  - apt-get update && apt-get install -y zip
+  - npm install -g npm@latest
+  - npm ci
+
+build:
+  stage: build
+  script:
+    - npm install
+    - export VITE_HOST_NAME=""
+    - npm run build
+  only:
+    - /\d+.\d+.\d+/
+  except:
+    - branches
+
+  artifacts:
+    paths:
+      - dist/
+    expire_in: 1 week
+
+push_to_artifactory:
+  stage: push_to_artifactory
+  script:
+    - export ZIP_FILE="${CI_PROJECT_NAME}-${CI_COMMIT_TAG}.zip"
+    - echo "Creating zip archive ${ZIP_FILE}..."
+    - cd dist && zip -r ../$ZIP_FILE . && cd ..
+    - curl -u ${ARTIFACTORY_USERNAME}:${ARTIFACTORY_PASSWORD} -T ./$ZIP_FILE "https://dish.jfrog.io/artifactory/libs-release-int/com/dish/ihs-genai/${CI_PROJECT_NAME}/${CI_COMMIT_TAG}/${ZIP_FILE}"
+
+  only:
+    - /\d+.\d+.\d+/
+  except:
+    - branches
+  
+  artifacts:
+    expire_in: 1 week
+    paths:
+      - ${CI_PROJECT_NAME}-${CI_COMMIT_TAG}.zip
+
+publish-artifact:
+  only:
+  - tags
+  stage: config
+  image: dish.jfrog.io/docker-dev-local/git-ci/saas/jdk-8-ci:stable
+  tags:
+  - devops-ci-new
+  before_script: []
+  script:
+      - sh push-config.sh
+  cache:
+    key: build-cache
+    paths:
+    - variables/
+  resource_group: config
+
+trigger_cd:
+  stage: trigger
+  only:
+  - tags
+  image:
+    name: dish.jfrog.io/docker-dev-local/git-ci/saas/jdk-8-ci:stable
+  tags:
+  - devops-ci-new
+  before_script: []
+  script:
+  #- curl -k -X POST -F token=${PE_CD_TRIGGER_TOKEN} -F "ref=master" -F "variables[triggertag]=${CI_COMMIT_TAG}" https://gitlab.com/api/v4/projects/${PE_CD_TRIGGER_PROJECT_ID}/trigger/pipeline
+  - curl -k -X POST -F token=${PE_CD_TRIGGER_TOKEN} -F "ref=main" -F "variables[triggertag]=${CI_COMMIT_TAG}" https://gitlab.com/api/v4/projects/${PE_CD_TRIGGER_PROJECT_ID}/trigger/pipeline
+
+  cache:
+    key: build-cache
+    paths:
+    - variables/
+  resource_group: trigger
